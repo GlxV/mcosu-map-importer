@@ -1,0 +1,507 @@
+import { VerticalBox, HorizontalBox, Button, LineEdit, Switch, ListView, CheckBox } from "std-widgets.slint";
+
+export struct BeatmapItem {
+    id: int,
+    title: string,
+    artist: string,
+    creator: string,
+    source: string,
+    source_short: string,
+    destination: string,
+    destination_short: string,
+    difficulties: string,
+    status: string,
+    status_badge_color: brush,
+    message: string,
+    error_short: string,
+    error_detail: string,
+    thumbnail: image,
+    show_delete: bool,
+    can_delete_source: bool,
+    delete_hint: string,
+    can_import: bool,
+    can_reimport: bool,
+    can_ignore: bool,
+    audio_available: bool,
+    audio_playing: bool,
+    audio_status: string,
+    audio_enabled: bool,
+    preview_enabled: bool,
+}
+
+export struct LogItem {
+    level: string,
+    text: string,
+}
+
+component LabelValueRow inherits HorizontalBox {
+    in property <string> label_text;
+    in property <string> value_text;
+    in property <brush> value_color: #cfd2da;
+    in property <bool> single_line: false;
+    spacing: 6px;
+    Text {
+        text: label_text;
+        color: #b2b5bd;
+        font-size: 11px;
+        wrap: no-wrap;
+    }
+    Text {
+        text: value_text;
+        color: value_color;
+        font-size: 12px;
+        wrap: single_line ? no-wrap : word-wrap;
+        horizontal-stretch: 1.0;
+        overflow: single_line ? elide : clip;
+    }
+}
+
+export component AppWindow inherits Window {
+    width: 1100px;
+    height: 780px;
+    title: "McOsu Importer";
+
+    in-out property<[BeatmapItem]> beatmaps;
+    in-out property<[LogItem]> logs;
+    in-out property<string> download_path;
+    in-out property<string> songs_path;
+    in-out property<bool> auto_import;
+    in-out property<bool> auto_delete_after_import;
+    in-out property<bool> show_completed;
+    in-out property<bool> paths_blocked;
+    in-out property<bool> bulk_import_running;
+    in-out property<bool> auto_delete_prompt_visible;
+    in-out property<bool> auto_delete_prompt_skip;
+    in-out property<string> path_warning;
+    in-out property<int> active_tab: 0;
+    in-out property<string> link_input;
+    in-out property<string> link_error;
+
+    callback pick_download();
+    callback pick_songs();
+    callback toggle_auto(bool);
+    callback toggle_auto_delete(bool);
+    callback toggle_show_completed(bool);
+    callback clear_completed();
+    callback import_all();
+    callback import_now(int);
+    callback reimport_now(int);
+    callback ignore_now(int);
+    callback delete_source(int);
+    callback open_source(int);
+    callback open_destination(int);
+    callback open_browser(int);
+    callback open_link(string);
+    callback add_file();
+    callback confirm_auto_delete(bool);
+    callback cancel_auto_delete_prompt();
+    callback copy_logs();
+    callback show_error_detail(int);
+    callback preview_audio(int);
+    callback preview_map(int);
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        background: #121318;
+    }
+
+    VerticalBox {
+        spacing: 14px;
+        x: 14px;
+        y: 14px;
+        width: parent.width - 28px;
+        height: parent.height - 28px;
+
+        Rectangle {
+            border-width: 1px;
+            border-color: #222731;
+            border-radius: 10px;
+            background: #1a1d24;
+            width: parent.width;
+            height: 190px;
+            VerticalBox {
+                spacing: 10px;
+                x: 12px;
+                y: 12px;
+                width: parent.width - 24px;
+                height: parent.height - 24px;
+
+                // Config row
+                HorizontalBox {
+                    spacing: 12px;
+                    VerticalBox {
+                        spacing: 6px;
+                        Text { text: "Pasta de Downloads"; color: #dce0e6; }
+                        HorizontalBox {
+                            spacing: 6px;
+                            LineEdit {
+                                text: download_path;
+                                read-only: true;
+                                horizontal-stretch: 1.0;
+                            }
+                            Button { text: "Escolher"; clicked => { pick_download(); } }
+                        }
+                    }
+                    VerticalBox {
+                        spacing: 6px;
+                        Text { text: "Pasta Songs do McOsu"; color: #dce0e6; }
+                        HorizontalBox {
+                            spacing: 6px;
+                            LineEdit {
+                                text: songs_path;
+                                read-only: true;
+                                horizontal-stretch: 1.0;
+                            }
+                            Button { text: "Escolher"; clicked => { pick_songs(); } }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    visible: path_warning != "";
+                    background: #2d1e0b;
+                    border-color: #d39828;
+                    border-width: 1px;
+                    border-radius: 6px;
+                    HorizontalBox {
+                        x: 8px;
+                        y: 6px;
+                        width: parent.width - 16px;
+                        height: parent.height - 12px;
+                        Text { text: path_warning; color: #f8d38a; wrap: word-wrap; }
+                    }
+                }
+
+                // Action row
+                HorizontalBox {
+                    spacing: 10px;
+                    HorizontalBox {
+                        spacing: 8px;
+                        Button {
+                            text: bulk_import_running ? "Importando..." : "Importar ja";
+                            enabled: !paths_blocked && !bulk_import_running;
+                            clicked => { import_all(); }
+                        }
+                        Button { text: "Adicionar .osz"; clicked => { add_file(); } }
+                        Button { text: "Limpar concluidos"; clicked => { clear_completed(); } }
+                    }
+                    Rectangle { width: 1px; height: 32px; background: #2a2f3a; }
+                    HorizontalBox {
+                        spacing: 8px;
+                        Switch {
+                            checked: auto_import;
+                            enabled: !paths_blocked;
+                            toggled => { auto_import = self.checked; toggle_auto(self.checked); }
+                        }
+                        Text { text: "Auto-import"; vertical-alignment: center; color: #dce0e6; }
+                        Switch {
+                            checked: auto_delete_after_import;
+                            enabled: !paths_blocked;
+                            toggled => { auto_delete_after_import = self.checked; toggle_auto_delete(self.checked); }
+                        }
+                        Text { text: "Excluir fonte automaticamente"; vertical-alignment: center; color: #dce0e6; }
+                        CheckBox {
+                            text: "Mostrar concluidos";
+                            checked: show_completed;
+                            toggled => { show_completed = self.checked; toggle_show_completed(self.checked); }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 8px;
+            Button {
+                text: "Fila";
+                enabled: active_tab != 0;
+                clicked => { active_tab = 0; }
+            }
+            Button {
+                text: "Links";
+                enabled: active_tab != 1;
+                clicked => { active_tab = 1; }
+            }
+            Rectangle { horizontal-stretch: 1.0; }
+        }
+
+        if active_tab == 0: Text { text: "Fila"; font-size: 16px; color: #e4e8ef; }
+        if active_tab == 0: Rectangle {
+            border-width: 1px;
+            border-color: #222731;
+            border-radius: 10px;
+            min-height: 260px;
+            background: #151821;
+            clip: true;
+            width: parent.width;
+            vertical-stretch: 1.0;
+
+            ListView {
+                width: parent.width;
+                height: parent.height;
+                for beatmap[idx] in beatmaps: Rectangle {
+                    border-width: 1px;
+                    border-color: #1f2531;
+                    border-radius: 10px;
+                    background: #1c202a;
+                    width: parent.width;
+
+                    card_content := VerticalBox {
+                        padding: 10px;
+                        spacing: 10px;
+                        width: parent.width;
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            Rectangle {
+                                width: 96px;
+                                height: 96px;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: #2a2f3a;
+                                clip: true;
+                                background: #0f1219;
+                                Image {
+                                    source: beatmap.thumbnail;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: contain;
+                                }
+                            }
+                            VerticalBox {
+                                spacing: 6px;
+                                horizontal-stretch: 1.0;
+                                Text {
+                                    text: beatmap.title;
+                                    font-size: 18px;
+                                    color: #f3f6ff;
+                                    wrap: no-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1.0;
+                                }
+                                Text {
+                                    text: beatmap.artist;
+                                    font-size: 13px;
+                                    color: #c7cbdb;
+                                    wrap: no-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1.0;
+                                }
+                                Text {
+                                    text: "Mapper: " + beatmap.creator;
+                                    font-size: 12px;
+                                    color: #9ea4b3;
+                                    wrap: no-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1.0;
+                                }
+
+                                HorizontalBox {
+                                    spacing: 8px;
+                                    Rectangle {
+                                        background: beatmap.status_badge_color;
+                                        border-radius: 12px;
+                                        width: 90px;
+                                        height: 24px;
+                                        Text {
+                                            text: beatmap.status;
+                                            color: #0d0f14;
+                                            font-size: 11px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            wrap: no-wrap;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    Text {
+                                        text: beatmap.message;
+                                        color: #cbd0df;
+                                        font-size: 12px;
+                                        visible: beatmap.message != "";
+                                        wrap: word-wrap;
+                                        horizontal-stretch: 1.0;
+                                    }
+                                }
+
+                                LabelValueRow { label_text: "Fonte"; value_text: beatmap.source_short; value_color: #dfe2eb; single_line: true; }
+                                LabelValueRow { label_text: "Destino"; value_text: beatmap.destination_short; value_color: #dfe2eb; single_line: true; }
+                                LabelValueRow { label_text: "Dificuldades"; value_text: beatmap.difficulties; value_color: #c7cbdb; single_line: false; }
+
+                                HorizontalBox {
+                                    spacing: 6px;
+                                    visible: beatmap.error_short != "";
+                                    Text { text: "Erro: " + beatmap.error_short; color: #e47b7b; wrap: word-wrap; horizontal-stretch: 1.0; }
+                                    Button { text: "Detalhes"; visible: beatmap.error_detail != ""; clicked => { show_error_detail(beatmap.id); } }
+                                }
+                                Text {
+                                    text: beatmap.delete_hint;
+                                    color: #f3c96a;
+                                    font-size: 11px;
+                                    visible: beatmap.delete_hint != "";
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 8px;
+                            Button {
+                                text: beatmap.audio_playing ? "Pausar preview" : "Preview";
+                                enabled: beatmap.audio_enabled;
+                                clicked => { preview_audio(beatmap.id); }
+                            }
+                            Text {
+                                text: beatmap.audio_status;
+                                font-size: 12px;
+                                color: beatmap.audio_available ? #a7ffd6 : #9ea4b3;
+                                wrap: no-wrap;
+                                overflow: elide;
+                                horizontal-stretch: 1.0;
+                            }
+                            Button {
+                                text: "Preview beatmap";
+                                enabled: beatmap.preview_enabled;
+                                clicked => { preview_map(beatmap.id); }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: #262b36; }
+
+                        HorizontalBox {
+                            spacing: 6px;
+                            Button { text: "Importar"; enabled: beatmap.can_import; clicked => { import_now(beatmap.id); } }
+                            Button { text: "Reimportar"; enabled: beatmap.can_reimport; clicked => { reimport_now(beatmap.id); } }
+                            Button { text: "Ignorar"; enabled: beatmap.can_ignore; clicked => { ignore_now(beatmap.id); } }
+                            Button { text: "Abrir arquivo"; clicked => { open_source(beatmap.id); } }
+                            Button { text: "Abrir destino"; clicked => { open_destination(beatmap.id); } }
+                            Button { text: "Abrir no navegador"; clicked => { open_browser(beatmap.id); } }
+                            Button {
+                                text: "Excluir fonte (.osz)";
+                                visible: beatmap.show_delete;
+                                enabled: beatmap.can_delete_source;
+                                clicked => { delete_source(beatmap.id); }
+                            }
+                        }
+                    }
+
+                    height: card_content.preferred-height > 170px ? card_content.preferred-height : 170px;
+                }
+            }
+        }
+
+        if active_tab == 1: Text { text: "Links"; font-size: 16px; color: #e4e8ef; }
+        if active_tab == 1: Rectangle {
+            border-width: 1px;
+            border-color: #222731;
+            border-radius: 10px;
+            background: #151821;
+            width: parent.width;
+            height: 170px;
+            VerticalBox {
+                spacing: 10px;
+                x: 12px;
+                y: 12px;
+                width: parent.width - 24px;
+                height: parent.height - 24px;
+                Text { text: "Cole o link do beatmap (.osz) para abrir no navegador"; color: #dce0e6; wrap: word-wrap; }
+                HorizontalBox {
+                    spacing: 8px;
+                    LineEdit {
+                        text: link_input;
+                        placeholder-text: "Cole o link aqui";
+                        horizontal-stretch: 1.0;
+                        edited => { link_input = self.text; }
+                    }
+                    Button {
+                        text: "Abrir no navegador";
+                        enabled: link_input != "";
+                        clicked => { open_link(link_input); }
+                    }
+                }
+                Text {
+                    text: link_error;
+                    color: #e47b7b;
+                    visible: link_error != "";
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "O download e feito no navegador; assim que o .osz aparecer na pasta de Downloads monitorada, ele entra na fila automaticamente.";
+                    color: #c7cbdb;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Rectangle {
+            border-width: 1px;
+            border-color: #222731;
+            border-radius: 10px;
+            background: #151821;
+            height: 150px;
+            width: parent.width;
+            VerticalBox {
+                spacing: 6px;
+                x: 8px;
+                y: 8px;
+                width: parent.width - 16px;
+                height: parent.height - 16px;
+                HorizontalBox {
+                    spacing: 8px;
+                    Text { text: "Logs"; font-size: 16px; color: #e4e8ef; }
+                    Rectangle { horizontal-stretch: 1.0; }
+                    Button { text: "Copiar logs"; clicked => { copy_logs(); } }
+                }
+                ListView {
+                    width: parent.width;
+                    height: parent.height - 32px;
+                    for line in logs: HorizontalBox {
+                        spacing: 8px;
+                        Rectangle {
+                            width: 10px; height: 10px; border-radius: 5px;
+                            background: line.level == "ERROR" ? #e47b7b : (line.level == "WARN" ? #f5c06b : #6adb9b);
+                        }
+                        Text { text: line.level; font-size: 11px; color: #9ea4b3; }
+                        Text { text: line.text; wrap: word-wrap; color: #dfe2eb; horizontal-stretch: 1.0; }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: auto_delete_prompt_visible;
+        x: 0px; y: 0px;
+        width: parent.width;
+        height: parent.height;
+        z: 10;
+        background: #00000088;
+        Rectangle {
+            x: (parent.width - 420px) / 2;
+            y: (parent.height - 180px) / 2;
+            width: 420px;
+            height: 180px;
+            border-radius: 6px;
+            background: #1e1e1e;
+            border-color: #888;
+            border-width: 1px;
+            VerticalBox {
+                spacing: 8px;
+                padding: 12px;
+                Text { text: "Excluir automaticamente os .osz apos importar?"; wrap: word-wrap; }
+                Text { text: "Os arquivos serao movidos para a Lixeira (ou apagados se nao for possivel). Apenas funciona quando a fonte estiver dentro da pasta de Downloads configurada."; font-size: 11px; color: #bbbbbb; wrap: word-wrap; }
+                CheckBox { text: "Nao perguntar novamente"; checked: auto_delete_prompt_skip; toggled => { auto_delete_prompt_skip = self.checked; } }
+                HorizontalBox {
+                    spacing: 8px;
+                    Button { text: "Continuar"; clicked => { confirm_auto_delete(auto_delete_prompt_skip); } }
+                    Button { text: "Cancelar"; clicked => { cancel_auto_delete_prompt(); } }
+                }
+            }
+        }
+    }
+}
