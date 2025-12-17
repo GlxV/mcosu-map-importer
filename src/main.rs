@@ -22,6 +22,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use urlencoding::encode;
+use serde::Deserialize;
 
 use app_state::{AppConfig, AudioPreviewStatus, BeatmapEntry, ImportStatus};
 use cache::{CacheStore, load_config, save_config};
@@ -45,7 +46,8 @@ enum CommandMsg {
     OpenSource(u64),
     OpenDestination(u64),
     OpenBrowser(u64),
-    OpenLink(String),
+    SearchBeatmaps(String),
+    DownloadBeatmap(u64),
     CopyLogs,
     DeleteSource(u64),
     Ignore(u64),
@@ -70,11 +72,37 @@ enum UiMsg {
     Log(LogLevel, String),
     ConfigChanged(AppConfig, Option<String>),
     ReplaceAll(Vec<BeatmapEntry>),
-    LinkError(Option<String>),
-    LinkUpdate(String),
+    BeatmapSearchState { loading: bool, message: Option<String> },
+    BeatmapResults(Vec<BeatmapSearchResult>),
+    BeatmapDownloadStatus { active: bool, text: Option<String> },
     ShowAutoDeletePrompt,
     HideAutoDeletePrompt,
     BulkRunning(bool),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BeatmapSource {
+    Beatconnect,
+    Chimu,
+}
+
+#[derive(Clone, Debug)]
+struct BeatmapSearchResult {
+    id: u64,
+    title: String,
+    artist: String,
+    creator: String,
+    source: BeatmapSource,
+    download_url: String,
+}
+
+#[derive(Clone, Debug)]
+struct BeatmapFound {
+    title: String,
+    artist: String,
+    creator: String,
+    source: BeatmapSource,
+    download_url: String,
 }
 
 fn load_startup_config() -> AppConfig {
@@ -127,6 +155,8 @@ fn main() -> anyhow::Result<()> {
         Arc::new(Mutex::new(HashMap::new()));
     let ui_state_entries = Arc::new(Mutex::new(Vec::<BeatmapEntry>::new()));
     let log_state = Arc::new(Mutex::new(Vec::<(LogLevel, String)>::new()));
+    let search_results_state: Arc<Mutex<HashMap<u64, BeatmapSearchResult>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     let (cmd_tx, cmd_rx) = mpsc::channel::<CommandMsg>();
     let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
@@ -155,10 +185,12 @@ fn main() -> anyhow::Result<()> {
     app.set_auto_delete_prompt_visible(false);
     app.set_auto_delete_prompt_skip(false);
     app.set_active_tab(0);
-    app.set_link_input(SharedString::from(
-        config.last_link.clone().unwrap_or_default(),
-    ));
-    app.set_link_error(SharedString::default());
+    app.set_beatmap_query(SharedString::default());
+    app.set_beatmap_loading(false);
+    app.set_beatmap_downloading(false);
+    app.set_beatmap_status(SharedString::default());
+    app.set_beatmap_message(SharedString::default());
+    app.set_beatmap_results(slint::ModelRc::new(Rc::new(slint::VecModel::default())));
     app.set_path_warning(SharedString::from(
         initial_warning.clone().unwrap_or_default(),
     ));
@@ -292,10 +324,16 @@ fn main() -> anyhow::Result<()> {
             let _ = tx.send(CommandMsg::OpenBrowser(id as u64));
         }
     });
-    app.on_open_link({
+    app.on_search_beatmaps({
         let tx = cmd_tx.clone();
-        move |url| {
-            let _ = tx.send(CommandMsg::OpenLink(url.to_string()));
+        move |query| {
+            let _ = tx.send(CommandMsg::SearchBeatmaps(query.to_string()));
+        }
+    });
+    app.on_download_beatmap({
+        let tx = cmd_tx.clone();
+        move |id| {
+            let _ = tx.send(CommandMsg::DownloadBeatmap(id as u64));
         }
     });
     app.on_add_file({
@@ -377,8 +415,10 @@ fn main() -> anyhow::Result<()> {
         let shared_cfg_thread = shared_config.clone();
         let cfg_start = config.clone();
         let guards_thread = guards.clone();
+        let search_map = search_results_state.clone();
         thread::spawn(move || {
             let mut next_id: u64 = 1;
+            let mut next_search_id: u64 = 1;
             let mut cfg = cfg_start;
             let audio_player = AudioPlayer::new();
             loop {
@@ -618,49 +658,211 @@ fn main() -> anyhow::Result<()> {
                                 }
                             }
                         }
-                        CommandMsg::OpenLink(url) => {
-                            let link = url.trim().to_string();
-                            if link.is_empty() {
-                                let _ = ui_sender.send(UiMsg::LinkError(Some(
-                                    "Cole um link http(s) para abrir".into(),
-                                )));
-                                let _ = ui_sender.send(UiMsg::Log(
-                                    LogLevel::Warn,
-                                    "Nenhum link informado para abrir".into(),
-                                ));
+                        CommandMsg::SearchBeatmaps(query) => {
+                            let trimmed = query.trim().to_string();
+                            if trimmed.is_empty() {
+                                let _ = ui_sender.send(UiMsg::BeatmapSearchState {
+                                    loading: false,
+                                    message: Some(
+                                        "Digite um termo para buscar beatmaps.".into(),
+                                    ),
+                                });
                                 continue;
                             }
-                            let lower = link.to_lowercase();
-                            if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-                                let _ = ui_sender.send(UiMsg::LinkError(Some(
-                                    "Apenas links http ou https sao aceitos".into(),
-                                )));
-                                let _ = ui_sender.send(UiMsg::Log(
-                                    LogLevel::Warn,
-                                    format!("Link rejeitado (esquema invalido): {link}"),
-                                ));
+                            let _ = ui_sender.send(UiMsg::BeatmapSearchState {
+                                loading: true,
+                                message: None,
+                            });
+
+                            let bc_handle = {
+                                let q = trimmed.clone();
+                                thread::spawn(move || fetch_beatconnect(&q))
+                            };
+                            let chimu_handle = {
+                                let q = trimmed.clone();
+                                thread::spawn(move || fetch_chimu(&q))
+                            };
+
+                            let mut found: Vec<BeatmapFound> = Vec::new();
+                            match bc_handle.join().unwrap_or_else(|_| {
+                                Err(anyhow::anyhow!("Thread de busca Beatconnect falhou"))
+                            }) {
+                                Ok(mut list) => found.append(&mut list),
+                                Err(err) => {
+                                    let _ = ui_sender.send(UiMsg::Log(
+                                        LogLevel::Warn,
+                                        format!("Falha na busca Beatconnect: {err}"),
+                                    ));
+                                }
+                            }
+                            match chimu_handle.join().unwrap_or_else(|_| {
+                                Err(anyhow::anyhow!("Thread de busca Chimu falhou"))
+                            }) {
+                                Ok(mut list) => found.append(&mut list),
+                                Err(err) => {
+                                    let _ = ui_sender.send(UiMsg::Log(
+                                        LogLevel::Warn,
+                                        format!("Falha na busca Chimu: {err}"),
+                                    ));
+                                }
+                            }
+
+                            let mut items: Vec<BeatmapSearchResult> = Vec::new();
+                            {
+                                if let Ok(mut map) = search_map.lock() {
+                                    map.clear();
+                                    for entry in found {
+                                        let id = next_search_id;
+                                        next_search_id += 1;
+                                        let result = BeatmapSearchResult {
+                                            id,
+                                            title: entry.title,
+                                            artist: entry.artist,
+                                            creator: entry.creator,
+                                            source: entry.source,
+                                            download_url: entry.download_url,
+                                        };
+                                        map.insert(id, result.clone());
+                                        items.push(result);
+                                    }
+                                }
+                            }
+
+                            if items.is_empty() {
+                                let _ = ui_sender.send(UiMsg::BeatmapResults(Vec::new()));
+                                let _ = ui_sender.send(UiMsg::BeatmapSearchState {
+                                    loading: false,
+                                    message: Some("Nenhum beatmap encontrado.".into()),
+                                });
+                            } else {
+                                let _ = ui_sender.send(UiMsg::BeatmapResults(items));
+                                let _ = ui_sender.send(UiMsg::BeatmapSearchState {
+                                    loading: false,
+                                    message: None,
+                                });
+                            }
+                        }
+                        CommandMsg::DownloadBeatmap(search_id) => {
+                            let result_opt = search_map
+                                .lock()
+                                .ok()
+                                .and_then(|m| m.get(&search_id).cloned());
+                            let Some(result) = result_opt else {
+                                let _ = ui_sender.send(UiMsg::BeatmapDownloadStatus {
+                                    active: false,
+                                    text: Some("Beatmap nao encontrado nos resultados.".into()),
+                                });
                                 continue;
-                            }
-                            let _ = ui_sender.send(UiMsg::LinkError(None));
-                            let _ = ui_sender.send(UiMsg::Log(
-                                LogLevel::Info,
-                                format!("Abrindo no navegador: {link}"),
-                            ));
-                            cfg.last_link = Some(link.clone());
-                            let _ = save_config(&cfg);
-                            if let Ok(mut guard) = shared_cfg_thread.lock() {
-                                *guard = cfg.clone();
-                            }
-                            let _ = ui_sender.send(UiMsg::LinkUpdate(link.clone()));
-                            if let Err(err) = open_url(&link) {
-                                let _ = ui_sender.send(UiMsg::LinkError(Some(
-                                    "Nao foi possivel abrir o link".into(),
-                                )));
-                                let _ = ui_sender.send(UiMsg::Log(
-                                    LogLevel::Error,
-                                    format!("Falha ao abrir link {link}: {err}"),
-                                ));
-                            }
+                            };
+                            let status_label = format!(
+                                "Baixando {} - {} ({}) via {}...",
+                                result.artist,
+                                result.title,
+                                result.creator,
+                                match result.source {
+                                    BeatmapSource::Beatconnect => "Beatconnect",
+                                    BeatmapSource::Chimu => "Chimu.moe",
+                                }
+                            );
+                            let _ = ui_sender.send(UiMsg::BeatmapDownloadStatus {
+                                active: true,
+                                text: Some(status_label),
+                            });
+
+                            let downloads_dir = cfg.downloads_dir.clone();
+                            let ui_sender_clone = ui_sender.clone();
+                            let cmd_tx_clone = cmd_tx.clone();
+                            thread::spawn(move || {
+                                let download_name = build_osz_name(&result);
+                                let target = ensure_unique_path(&downloads_dir, &download_name);
+                                let part_path = target.with_extension("osz.part");
+                                let client = reqwest::blocking::Client::builder()
+                                    .user_agent("McOsuImporter/beatmap-search")
+                                    .build();
+                                let client = match client {
+                                    Ok(c) => c,
+                                    Err(err) => {
+                                        let _ = ui_sender_clone.send(UiMsg::BeatmapDownloadStatus {
+                                            active: false,
+                                            text: Some(format!(
+                                                "Falha ao inicializar download: {err}"
+                                            )),
+                                        });
+                                        return;
+                                    }
+                                };
+                                let res = download_with_progress(
+                                    &client,
+                                    &result.download_url,
+                                    &part_path,
+                                    &target,
+                                    |done, total| {
+                                        if let Some(total) = total {
+                                            let pct = ((done as f64 / total as f64) * 100.0)
+                                                .clamp(0.0, 100.0);
+                                            let _ = ui_sender_clone.send(
+                                                UiMsg::BeatmapDownloadStatus {
+                                                    active: true,
+                                                    text: Some(format!(
+                                                        "Baixando... {:.0}% ({:.1} / {:.1} MB)",
+                                                        pct,
+                                                        done as f64 / 1_048_576.0,
+                                                        total as f64 / 1_048_576.0
+                                                    )),
+                                                },
+                                            );
+                                        } else {
+                                            let _ = ui_sender_clone.send(
+                                                UiMsg::BeatmapDownloadStatus {
+                                                    active: true,
+                                                    text: Some(format!(
+                                                        "Baixando... {:.1} MB",
+                                                        done as f64 / 1_048_576.0
+                                                    )),
+                                                },
+                                            );
+                                        }
+                                    },
+                                );
+                                match res {
+                                    Ok(_) => {
+                                        let _ = ui_sender_clone.send(
+                                            UiMsg::BeatmapDownloadStatus {
+                                                active: false,
+                                                text: Some("Download concluido!".into()),
+                                            },
+                                        );
+                                        let _ = ui_sender_clone.send(UiMsg::Log(
+                                            LogLevel::Info,
+                                            format!(
+                                                "Download concluido: {}",
+                                                target
+                                                    .file_name()
+                                                    .and_then(|s| s.to_str())
+                                                    .unwrap_or_default()
+                                            ),
+                                        ));
+                                        let _ = cmd_tx_clone.send(CommandMsg::AddFile(target));
+                                    }
+                                    Err(err) => {
+                                        let _ = ui_sender_clone.send(
+                                            UiMsg::BeatmapDownloadStatus {
+                                                active: false,
+                                                text: Some(format!(
+                                                    "Falha no download: {err}"
+                                                )),
+                                            },
+                                        );
+                                        let _ = ui_sender_clone.send(UiMsg::Log(
+                                            LogLevel::Error,
+                                            format!(
+                                                "Erro ao baixar {}: {err}",
+                                                result.download_url
+                                            ),
+                                        ));
+                                    }
+                                }
+                            });
                         }
                         CommandMsg::DeleteSource(id) => {
                             if let Some(mut entry) =
@@ -831,20 +1033,40 @@ fn main() -> anyhow::Result<()> {
                         })
                         .ok();
                     }
-                    UiMsg::LinkError(err) => {
+                    UiMsg::BeatmapSearchState { loading, message } => {
                         let app_ref = app_weak.clone();
                         slint::invoke_from_event_loop(move || {
                             if let Some(app) = app_ref.upgrade() {
-                                app.set_link_error(SharedString::from(err.unwrap_or_default()));
+                                app.set_beatmap_loading(loading);
+                                app.set_beatmap_message(SharedString::from(
+                                    message.unwrap_or_default(),
+                                ));
                             }
                         })
                         .ok();
                     }
-                    UiMsg::LinkUpdate(val) => {
+                    UiMsg::BeatmapResults(list) => {
                         let app_ref = app_weak.clone();
                         slint::invoke_from_event_loop(move || {
                             if let Some(app) = app_ref.upgrade() {
-                                app.set_link_input(SharedString::from(val));
+                                let items = list
+                                    .iter()
+                                    .map(to_search_item)
+                                    .collect::<Vec<_>>();
+                                let model = Rc::new(slint::VecModel::from(items));
+                                app.set_beatmap_results(model.into());
+                            }
+                        })
+                        .ok();
+                    }
+                    UiMsg::BeatmapDownloadStatus { active, text } => {
+                        let app_ref = app_weak.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(app) = app_ref.upgrade() {
+                                app.set_beatmap_downloading(active);
+                                app.set_beatmap_status(SharedString::from(
+                                    text.unwrap_or_default(),
+                                ));
                             }
                         })
                         .ok();
@@ -867,9 +1089,6 @@ fn main() -> anyhow::Result<()> {
                                 app.set_auto_import(cfg.auto_import);
                                 app.set_auto_delete_after_import(cfg.auto_delete_source);
                                 app.set_paths_blocked(warning.is_some());
-                                app.set_link_input(SharedString::from(
-                                    cfg.last_link.clone().unwrap_or_default(),
-                                ));
                                 app.set_path_warning(SharedString::from(
                                     warning.clone().unwrap_or_default(),
                                 ));
@@ -2364,4 +2583,157 @@ fn open_url(url: &str) -> std::io::Result<()> {
 fn open_in_browser(set_id: i32) -> std::io::Result<()> {
     let url = format!("https://osu.ppy.sh/beatmapsets/{set_id}");
     open_url(&url)
+}
+
+fn fetch_beatconnect(query: &str) -> anyhow::Result<Vec<BeatmapFound>> {
+    #[derive(Deserialize)]
+    struct BeatconnectResponse {
+        beatmaps: Vec<BeatconnectBeatmap>,
+    }
+    #[derive(Deserialize)]
+    struct BeatconnectBeatmap {
+        title: String,
+        artist: String,
+        creator: String,
+        #[serde(default)]
+        download_url: String,
+    }
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("McOsuImporter/beatmap-search")
+        .build()?;
+    let url = format!("https://api.beatconnect.io/search?q={}", query);
+    let resp = client.get(url).send()?.error_for_status()?;
+    let parsed: BeatconnectResponse = resp.json()?;
+    let items = parsed
+        .beatmaps
+        .into_iter()
+        .filter(|b| !b.download_url.is_empty())
+        .map(|b| BeatmapFound {
+            title: b.title,
+            artist: b.artist,
+            creator: b.creator,
+            source: BeatmapSource::Beatconnect,
+            download_url: b.download_url,
+        })
+        .collect();
+    Ok(items)
+}
+
+fn fetch_chimu(query: &str) -> anyhow::Result<Vec<BeatmapFound>> {
+    #[derive(Deserialize)]
+    struct ChimuResponse {
+        data: Vec<ChimuEntry>,
+    }
+    #[derive(Deserialize)]
+    struct ChimuEntry {
+        #[serde(rename = "SetId")]
+        set_id: u64,
+        #[serde(rename = "Title")]
+        title: String,
+        #[serde(rename = "Artist")]
+        artist: String,
+        #[serde(rename = "Creator")]
+        creator: String,
+    }
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("McOsuImporter/beatmap-search")
+        .build()?;
+    let url = format!("https://api.chimu.moe/v1/search?query={}", query);
+    let resp = client.get(url).send()?.error_for_status()?;
+    let parsed: ChimuResponse = resp.json()?;
+    let items = parsed
+        .data
+        .into_iter()
+        .map(|b| {
+            let download_url = format!("https://api.chimu.moe/v1/download/{}", b.set_id);
+            BeatmapFound {
+                title: b.title,
+                artist: b.artist,
+                creator: b.creator,
+                source: BeatmapSource::Chimu,
+                download_url,
+            }
+        })
+        .collect();
+    Ok(items)
+}
+
+fn build_osz_name(result: &BeatmapSearchResult) -> String {
+    let mut name = format!("{} - {} ({})", result.artist, result.title, result.creator);
+    name = app_state::sanitize_path_component(&name);
+    if !name.to_lowercase().ends_with(".osz") {
+        name.push_str(".osz");
+    }
+    name
+}
+
+fn ensure_unique_path(base_dir: &Path, filename: &str) -> PathBuf {
+    let mut candidate = base_dir.join(filename);
+    let mut counter = 1;
+    while candidate.exists() {
+        let stem = candidate
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("beatmap");
+        let ext = candidate.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let new_name = if ext.is_empty() {
+            format!("{stem} ({counter})")
+        } else {
+            format!("{stem} ({counter}).{ext}")
+        };
+        candidate = base_dir.join(new_name);
+        counter += 1;
+    }
+    candidate
+}
+
+fn download_with_progress<F>(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    temp_path: &Path,
+    final_path: &Path,
+    progress: F,
+) -> anyhow::Result<()>
+where
+    F: Fn(u64, Option<u64>),
+{
+    let res = (|| {
+        if let Some(parent) = temp_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut resp = client.get(url).send()?.error_for_status()?;
+        let total = resp.content_length();
+        let mut file = std::fs::File::create(temp_path)?;
+        let mut buf = [0u8; 32 * 1024];
+        let mut downloaded = 0u64;
+        loop {
+            let n = resp.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n])?;
+            downloaded += n as u64;
+            progress(downloaded, total);
+        }
+        file.flush()?;
+        std::fs::rename(temp_path, final_path)?;
+        Ok::<(), anyhow::Error>(())
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(temp_path);
+    }
+    res
+}
+
+fn to_search_item(result: &BeatmapSearchResult) -> BeatmapSearchItem {
+    let source_label = match result.source {
+        BeatmapSource::Beatconnect => "Beatconnect",
+        BeatmapSource::Chimu => "Chimu.moe",
+    };
+    BeatmapSearchItem {
+        id: result.id as i32,
+        title: SharedString::from(&result.title),
+        artist_mapper: SharedString::from(format!("{} | {}", result.artist, result.creator)),
+        source: SharedString::from(source_label),
+    }
 }

@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 ### Added
 - UI reorganizada: barra superior em duas linhas (configuracoes e acoes), cards com thumbnail fixa, badges suaves de status e botoes sem sobreposicao.
-- Aba Links para abrir URLs de download no navegador (sem download interno), exibindo erro de validacao e lembrando o ultimo link.
+ - Aba Beatmaps para buscar em Beatconnect e Chimu.moe e baixar `.osz` direto para a pasta de Downloads, com indicadores de busca/download e mensagem quando nao ha resultados.
 - Preview de audio por beatmap (rodio) com cache local e controle unico play/pause por vez.
 - Preview externo do beatmap usando viewer estatico vendorizado servido em `127.0.0.1`, abrindo nova janela do navegador (tenta modo app em Edge/Chrome) e registrando porta/pasta/URL no log.
 - Auto-import sempre inicia desligado em cada abertura; auto-importa apenas itens detectados apos o toggle estar ligado. Botao global "Importar ja" dispara a fila pronta sem travar a UI.

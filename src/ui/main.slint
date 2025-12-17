@@ -34,6 +34,13 @@ export struct LogItem {
     text: string,
 }
 
+export struct BeatmapSearchItem {
+    id: int,
+    title: string,
+    artist_mapper: string,
+    source: string,
+}
+
 component LabelValueRow inherits HorizontalBox {
     in property <string> label_text;
     in property <string> value_text;
@@ -74,8 +81,12 @@ export component AppWindow inherits Window {
     in-out property<bool> auto_delete_prompt_skip;
     in-out property<string> path_warning;
     in-out property<int> active_tab: 0;
-    in-out property<string> link_input;
-    in-out property<string> link_error;
+    in-out property<string> beatmap_query;
+    in-out property<bool> beatmap_loading;
+    in-out property<bool> beatmap_downloading;
+    in-out property<string> beatmap_status;
+    in-out property<string> beatmap_message;
+    in-out property<[BeatmapSearchItem]> beatmap_results;
 
     callback pick_download();
     callback pick_songs();
@@ -91,7 +102,8 @@ export component AppWindow inherits Window {
     callback open_source(int);
     callback open_destination(int);
     callback open_browser(int);
-    callback open_link(string);
+    callback search_beatmaps(string);
+    callback download_beatmap(int);
     callback add_file();
     callback confirm_auto_delete(bool);
     callback cancel_auto_delete_prompt();
@@ -221,7 +233,7 @@ export component AppWindow inherits Window {
                 clicked => { active_tab = 0; }
             }
             Button {
-                text: "Links";
+                text: "Beatmaps";
                 enabled: active_tab != 1;
                 clicked => { active_tab = 1; }
             }
@@ -394,45 +406,85 @@ export component AppWindow inherits Window {
             }
         }
 
-        if active_tab == 1: Text { text: "Links"; font-size: 16px; color: #e4e8ef; }
+        if active_tab == 1: Text { text: "Beatmaps"; font-size: 16px; color: #e4e8ef; }
         if active_tab == 1: Rectangle {
             border-width: 1px;
             border-color: #222731;
             border-radius: 10px;
             background: #151821;
             width: parent.width;
-            height: 170px;
+            height: 240px;
             VerticalBox {
                 spacing: 10px;
                 x: 12px;
                 y: 12px;
                 width: parent.width - 24px;
                 height: parent.height - 24px;
-                Text { text: "Cole o link do beatmap (.osz) para abrir no navegador"; color: #dce0e6; wrap: word-wrap; }
                 HorizontalBox {
                     spacing: 8px;
                     LineEdit {
-                        text: link_input;
-                        placeholder-text: "Cole o link aqui";
+                        text: beatmap_query;
+                        placeholder-text: "Pesquisar beatmap por nome, artista ou mapper...";
                         horizontal-stretch: 1.0;
-                        edited => { link_input = self.text; }
+                        edited => { beatmap_query = self.text; }
+                        accepted => { search_beatmaps(beatmap_query); }
                     }
                     Button {
-                        text: "Abrir no navegador";
-                        enabled: link_input != "";
-                        clicked => { open_link(link_input); }
+                        text: beatmap_loading ? "Buscando..." : "Buscar";
+                        enabled: !beatmap_loading && beatmap_query != "";
+                        clicked => { search_beatmaps(beatmap_query); }
+                    }
+                }
+                HorizontalBox {
+                    spacing: 8px;
+                    Text {
+                        text: beatmap_message;
+                        color: #e4e8ef;
+                        visible: beatmap_message != "";
+                        wrap: word-wrap;
+                    }
+                    Rectangle { horizontal-stretch: 1.0; }
+                    Text {
+                        text: "Buscando...";
+                        visible: beatmap_loading;
+                        color: #c7cbdb;
+                    }
+                }
+                Rectangle {
+                    border-width: 1px;
+                    border-color: #222731;
+                    border-radius: 6px;
+                    background: #0f1219;
+                    width: parent.width;
+                    height: parent.height - 90px;
+                    clip: true;
+                    ListView {
+                        width: parent.width;
+                        height: parent.height;
+                        for item in beatmap_results: HorizontalBox {
+                            spacing: 8px;
+                            padding: 8px;
+                            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: item.source == "Beatconnect" ? #6adb9b : #6ab7ff; y: 8px; }
+                            VerticalBox {
+                                spacing: 4px;
+                                width: parent.width - 140px;
+                                Text { text: item.title; color: #f3f6ff; font-size: 14px; wrap: no-wrap; overflow: elide; horizontal-stretch: 1.0; }
+                                Text { text: item.artist_mapper; color: #c7cbdb; font-size: 12px; wrap: no-wrap; overflow: elide; horizontal-stretch: 1.0; }
+                                Text { text: "Fonte: " + item.source; color: #9ea4b3; font-size: 11px; }
+                            }
+                            Rectangle { horizontal-stretch: 1.0; }
+                            Button {
+                                text: "Download";
+                                enabled: !beatmap_downloading;
+                                clicked => { download_beatmap(item.id); }
+                            }
+                        }
                     }
                 }
                 Text {
-                    text: link_error;
-                    color: #e47b7b;
-                    visible: link_error != "";
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: "O download e feito no navegador; assim que o .osz aparecer na pasta de Downloads monitorada, ele entra na fila automaticamente.";
-                    color: #c7cbdb;
-                    font-size: 12px;
+                    text: beatmap_status;
+                    color: beatmap_downloading ? #c7cbdb : #a7ffd6;
+                    visible: beatmap_status != "";
                     wrap: word-wrap;
                 }
             }

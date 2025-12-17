@@ -46,8 +46,6 @@ pub struct AppConfig {
     pub auto_delete_source: bool,
     #[serde(default)]
     pub suppress_delete_prompt: bool,
-    #[serde(default)]
-    pub last_link: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -63,7 +61,6 @@ impl Default for AppConfig {
             stability: StabilityConfig::default(),
             auto_delete_source: false,
             suppress_delete_prompt: false,
-            last_link: None,
         }
     }
 }

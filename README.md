@@ -35,7 +35,7 @@ Aplicativo desktop leve para Windows (compatível com outros SOs) que monitora a
    - Mensagens de erro ficam resumidas na linha `Erro:` com botao `Detalhes` para ver o texto completo (extracao do zip, escrita em Songs, leitura de metadados ou exclusao da fonte).
    - Layout dos cards: thumbnail fixa a esquerda, info em linhas separadas e botoes organizados em linhas dedicadas (preview + acoes), com caminhos encurtados para evitar overlap.
 5) `Adicionar .osz` permite enfileirar manualmente.
-6) Aba `Links`: cole um URL http(s) e clique em `Abrir no navegador`. O download ocorre no navegador; quando o `.osz` aparecer na pasta de Downloads monitorada, ele entra na fila automaticamente. O ultimo link aberto fica salvo em `config.json` (campo `last_link`).
+6) Aba `Beatmaps`: pesquise por nome/artista/mapper e clique em `Buscar` para consultar Beatconnect e Chimu.moe. Os resultados listam titulo, artista/mapper, fonte e botao `Download`. O download ocorre direto para a pasta de Downloads configurada; ao concluir, o `.osz` e enfileirado automaticamente.
 
 ### Preview de audio e mapa
 - Audio: so toca um preview por vez; clicar em outro item pausa o anterior. Usa o arquivo de audio do `.osz` ou do destino importado e reusa cache em `%LOCALAPPDATA%/mcosu-importer/cache/audio/`.
@@ -66,7 +66,7 @@ Steam > Biblioteca > clique direito em McOsu > Gerenciar > Procurar arquivos loc
 
 ### Cache, config e logs
 - Diretorio de dados: `%LOCALAPPDATA%/mcosu-importer` (Windows) ou equivalente XDG/Library em outros SOs.
-- `config.json`: caminhos de downloads, songs, auto-import, estabilidade e `last_link` (ultimo link aberto na aba Links).
+- `config.json`: caminhos de downloads, songs, auto-import e estabilidade.
 - `cache/cache.json`: thumbnails, cache de audio e indice de duplicados (BeatmapSetID e hash).
 - Thumbnails: `cache/thumbnails/`.
 - Preview de audio: `cache/audio/<hash>/`; preview visual/extracao: `cache/preview/<hash>/` (servido pelo HTTP local ao abrir o viewer).
