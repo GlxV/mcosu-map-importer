@@ -13,7 +13,7 @@ use arboard::Clipboard;
 use audio::AudioPlayer;
 use anyhow::Context;
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, create_dir_all, OpenOptions};
 use std::env;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use urlencoding::encode;
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
 
 use app_state::{AppConfig, AudioPreviewStatus, BeatmapEntry, ImportStatus};
 use cache::{CacheStore, load_config, save_config};
@@ -82,8 +82,8 @@ enum UiMsg {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum BeatmapSource {
-    Beatconnect,
-    Chimu,
+    Catboy,
+    Nerinyan,
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +103,66 @@ struct BeatmapFound {
     creator: String,
     source: BeatmapSource,
     download_url: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct CatboyApiResponse {
+    #[serde(default)]
+    results: Vec<CatboyBeatmap>,
+}
+
+#[derive(Deserialize, Debug)]
+struct CatboyBeatmap {
+    #[serde(rename = "SetID")]
+    set_id: u64,
+    #[serde(rename = "Title")]
+    title: String,
+    #[serde(rename = "Artist")]
+    artist: String,
+    #[serde(rename = "Creator")]
+    creator: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct NerinyanBeatmap {
+    #[serde(rename = "id", deserialize_with = "deserialize_flexible_id")]
+    set_id: u64,
+    #[serde(rename = "artist")]
+    artist: String,
+    #[serde(rename = "title")]
+    title: String,
+    #[serde(rename = "creator")]
+    creator: String,
+    #[serde(rename = "mode")]
+    mode: Option<u8>,
+}
+
+fn deserialize_flexible_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct FlexibleIdVisitor;
+
+    impl<'de> de::Visitor<'de> for FlexibleIdVisitor {
+        type Value = u64;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("um número ou uma string que possa ser um número")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+            Ok(value)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.parse().unwrap_or(0))
+        }
+    }
+
+    deserializer.deserialize_any(FlexibleIdVisitor)
 }
 
 fn load_startup_config() -> AppConfig {
@@ -131,6 +191,11 @@ fn main() -> anyhow::Result<()> {
     app_state::ensure_dir(&cache::thumbnails_dir())?;
     app_state::ensure_dir(&cache::audio_cache_dir())?;
     app_state::ensure_dir(&cache::preview_dir())?;
+
+    let log_dir = Path::new("logs");
+    if !log_dir.exists() {
+        create_dir_all(log_dir)?;
+    }
 
     let file_appender = tracing_appender::rolling::never(cache::logs_dir(), "app.log");
     let (nb_writer, _log_guard) = tracing_appender::non_blocking(file_appender);
@@ -659,13 +724,23 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
                         CommandMsg::SearchBeatmaps(query) => {
+                            // --- CONFIGURAÇÃO DO LOG EM ARQUIVO ---
+                            let log_path = "logs/search_log.txt";
+                            let mut log_file = OpenOptions::new()
+                                .create(true) // Cria o arquivo se não existir
+                                .append(true) // Adiciona ao final do arquivo em vez de apagar
+                                .open(log_path)
+                                .expect("Não foi possível abrir o arquivo de log.");
+                            // --- FIM DA CONFIGURAÇÃO ---
+
+                            // Agora, todas as chamadas `println!` e `eprintln!` são substituídas por `writeln!`
+                            writeln!(log_file, "\n--- INICIANDO NOVO CICLO DE BUSCA ---").unwrap();
+                            
                             let trimmed = query.trim().to_string();
                             if trimmed.is_empty() {
                                 let _ = ui_sender.send(UiMsg::BeatmapSearchState {
                                     loading: false,
-                                    message: Some(
-                                        "Digite um termo para buscar beatmaps.".into(),
-                                    ),
+                                    message: Some("Digite um termo para buscar beatmaps.".into()),
                                 });
                                 continue;
                             }
@@ -674,73 +749,74 @@ fn main() -> anyhow::Result<()> {
                                 message: None,
                             });
 
-                            let bc_handle = {
-                                let q = trimmed.clone();
-                                thread::spawn(move || fetch_beatconnect(&q))
-                            };
-                            let chimu_handle = {
-                                let q = trimmed.clone();
-                                thread::spawn(move || fetch_chimu(&q))
+                            writeln!(log_file, "[DIAGNÓSTICO] Buscando pelo termo: '{}'", trimmed).unwrap();
+
+                            let mut fetch_error = false;
+                            let found: Vec<BeatmapFound> = match fetch_nerinyan(&trimmed) {
+                                Ok(list) => {
+                                    writeln!(log_file, "[DIAGNÓSTICO] fetch_nerinyan retornou Ok. Número de beatmaps encontrados: {}", list.len()).unwrap();
+                                    list
+                                },
+                                Err(err) => {
+                                    // --- MUDANÇA CRÍTICA ---
+                                    // Agora, em vez de uma mensagem genérica, vamos imprimir a causa raiz detalhada do erro.
+                                    writeln!(log_file, "--- ERRO FATAL NA FUNÇÃO fetch_nerinyan ---").unwrap();
+                                    writeln!(log_file, "A causa raiz do erro foi:").unwrap();
+                                    writeln!(log_file, "{:#?}", err).unwrap(); // Imprime o erro detalhado com formatação.
+                                    // --- FIM DA MUDANÇA ---
+                                    
+                                    fetch_error = true;
+                                    let _ = ui_sender.send(UiMsg::Log(
+                                        LogLevel::Warn,
+                                        format!("Falha na busca Nerinyan: {:?}", err),
+                                    ));
+                                    Vec::new()
+                                }
                             };
 
-                            let mut found: Vec<BeatmapFound> = Vec::new();
-                            match bc_handle.join().unwrap_or_else(|_| {
-                                Err(anyhow::anyhow!("Thread de busca Beatconnect falhou"))
-                            }) {
-                                Ok(mut list) => found.append(&mut list),
-                                Err(err) => {
-                                    let _ = ui_sender.send(UiMsg::Log(
-                                        LogLevel::Warn,
-                                        format!("Falha na busca Beatconnect: {err}"),
-                                    ));
-                                }
-                            }
-                            match chimu_handle.join().unwrap_or_else(|_| {
-                                Err(anyhow::anyhow!("Thread de busca Chimu falhou"))
-                            }) {
-                                Ok(mut list) => found.append(&mut list),
-                                Err(err) => {
-                                    let _ = ui_sender.send(UiMsg::Log(
-                                        LogLevel::Warn,
-                                        format!("Falha na busca Chimu: {err}"),
-                                    ));
-                                }
-                            }
+                            writeln!(log_file, "[DIAGNÓSTICO] Vetor 'found' tem {} itens antes do processamento do Mutex.", found.len()).unwrap();
 
                             let mut items: Vec<BeatmapSearchResult> = Vec::new();
-                            {
-                                if let Ok(mut map) = search_map.lock() {
+                            match search_map.lock() {
+                                Ok(mut map) => {
+                                    writeln!(log_file, "[DIAGNÓSTICO] Mutex lock adquirido com sucesso.").unwrap();
                                     map.clear();
                                     for entry in found {
                                         let id = next_search_id;
                                         next_search_id += 1;
-                                        let result = BeatmapSearchResult {
-                                            id,
-                                            title: entry.title,
-                                            artist: entry.artist,
-                                            creator: entry.creator,
-                                            source: entry.source,
-                                            download_url: entry.download_url,
-                                        };
+                                        let result = BeatmapSearchResult { id, title: entry.title, artist: entry.artist, creator: entry.creator, source: entry.source, download_url: entry.download_url };
                                         map.insert(id, result.clone());
                                         items.push(result);
+                                    }
+                                },
+                                Err(poisoned) => {
+                                    writeln!(log_file, "[DIAGNÓSTICO] Mutex estava envenenado! Tentando recuperar.").unwrap();
+                                    let mut map = poisoned.into_inner();
+                                    map.clear();
+                                    for entry in found {
+                                        let id = next_search_id;
+                                        next_search_id += 1;
+                                        let result = BeatmapSearchResult { id, title: entry.title, artist: entry.artist, creator: entry.creator, source: entry.source, download_url: entry.download_url };
+                                        map.insert(id, result.clone())
+;                    items.push(result);
                                     }
                                 }
                             }
 
+                            writeln!(log_file, "[DIAGNÓSTICO] Vetor 'items' tem {} itens após o processamento do Mutex.", items.len()).unwrap();
+
                             if items.is_empty() {
+                                writeln!(log_file, "[DIAGNÓSTICO] 'items' está vazio. Preparando mensagem de 'sem resultados' ou 'falha'.").unwrap();
+                                let message = if fetch_error { "Falha ao buscar beatmaps na Nerinyan.".into() } else { "Nenhum beatmap encontrado.".into() };
+                                writeln!(log_file, "[DIAGNÓSTICO] Enviando para UI a mensagem: '{}'", message).unwrap();
                                 let _ = ui_sender.send(UiMsg::BeatmapResults(Vec::new()));
-                                let _ = ui_sender.send(UiMsg::BeatmapSearchState {
-                                    loading: false,
-                                    message: Some("Nenhum beatmap encontrado.".into()),
-                                });
+                                let _ = ui_sender.send(UiMsg::BeatmapSearchState { loading: false, message: Some(message) });
                             } else {
+                                writeln!(log_file, "[DIAGNÓSTICO] 'items' tem resultados. Enviando {} itens para a UI.", items.len()).unwrap();
                                 let _ = ui_sender.send(UiMsg::BeatmapResults(items));
-                                let _ = ui_sender.send(UiMsg::BeatmapSearchState {
-                                    loading: false,
-                                    message: None,
-                                });
+                                let _ = ui_sender.send(UiMsg::BeatmapSearchState { loading: false, message: None });
                             }
+                            writeln!(log_file, "--- FIM DO CICLO DE BUSCA ---\n").unwrap();
                         }
                         CommandMsg::DownloadBeatmap(search_id) => {
                             let result_opt = search_map
@@ -759,10 +835,7 @@ fn main() -> anyhow::Result<()> {
                                 result.artist,
                                 result.title,
                                 result.creator,
-                                match result.source {
-                                    BeatmapSource::Beatconnect => "Beatconnect",
-                                    BeatmapSource::Chimu => "Chimu.moe",
-                                }
+                                beatmap_source_label(&result.source),
                             );
                             let _ = ui_sender.send(UiMsg::BeatmapDownloadStatus {
                                 active: true,
@@ -845,19 +918,22 @@ fn main() -> anyhow::Result<()> {
                                         let _ = cmd_tx_clone.send(CommandMsg::AddFile(target));
                                     }
                                     Err(err) => {
+                                        eprintln!("Falha no download: {:?}", err);
                                         let _ = ui_sender_clone.send(
                                             UiMsg::BeatmapDownloadStatus {
                                                 active: false,
                                                 text: Some(format!(
-                                                    "Falha no download: {err}"
+                                                    "Falha no download: {:?}",
+                                                    err
                                                 )),
                                             },
                                         );
                                         let _ = ui_sender_clone.send(UiMsg::Log(
                                             LogLevel::Error,
                                             format!(
-                                                "Erro ao baixar {}: {err}",
-                                                result.download_url
+                                                "Erro ao baixar {}: {:?}",
+                                                result.download_url,
+                                                err
                                             ),
                                         ));
                                     }
@@ -2585,79 +2661,139 @@ fn open_in_browser(set_id: i32) -> std::io::Result<()> {
     open_url(&url)
 }
 
-fn fetch_beatconnect(query: &str) -> anyhow::Result<Vec<BeatmapFound>> {
-    #[derive(Deserialize)]
-    struct BeatconnectResponse {
-        beatmaps: Vec<BeatconnectBeatmap>,
-    }
-    #[derive(Deserialize)]
-    struct BeatconnectBeatmap {
-        title: String,
-        artist: String,
-        creator: String,
-        #[serde(default)]
-        download_url: String,
-    }
+fn fetch_nerinyan(query: &str) -> anyhow::Result<Vec<BeatmapFound>> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("McOsuImporter/beatmap-search")
+        .timeout(std::time::Duration::from_secs(30))
         .build()?;
-    let url = format!("https://api.beatconnect.io/search?q={}", query);
-    let resp = client.get(url).send()?.error_for_status()?;
-    let parsed: BeatconnectResponse = resp.json()?;
-    let items = parsed
-        .beatmaps
-        .into_iter()
-        .filter(|b| !b.download_url.is_empty())
-        .map(|b| BeatmapFound {
-            title: b.title,
-            artist: b.artist,
-            creator: b.creator,
-            source: BeatmapSource::Beatconnect,
-            download_url: b.download_url,
-        })
-        .collect();
-    Ok(items)
-}
 
-fn fetch_chimu(query: &str) -> anyhow::Result<Vec<BeatmapFound>> {
-    #[derive(Deserialize)]
-    struct ChimuResponse {
-        data: Vec<ChimuEntry>,
+    let encoded_query = encode(query);
+    let url = format!("https://api.nerinyan.moe/search?q={}", encoded_query);
+    let resp = client.get(&url).send()?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("Falha na busca Nerinyan: Status HTTP {}", resp.status());
     }
-    #[derive(Deserialize)]
-    struct ChimuEntry {
-        #[serde(rename = "SetId")]
-        set_id: u64,
-        #[serde(rename = "Title")]
-        title: String,
-        #[serde(rename = "Artist")]
-        artist: String,
-        #[serde(rename = "Creator")]
-        creator: String,
-    }
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("McOsuImporter/beatmap-search")
-        .build()?;
-    let url = format!("https://api.chimu.moe/v1/search?query={}", query);
-    let resp = client.get(url).send()?.error_for_status()?;
-    let parsed: ChimuResponse = resp.json()?;
-    let items = parsed
-        .data
-        .into_iter()
-        .map(|b| {
-            let download_url = format!("https://api.chimu.moe/v1/download/{}", b.set_id);
-            BeatmapFound {
-                title: b.title,
-                artist: b.artist,
-                creator: b.creator,
-                source: BeatmapSource::Chimu,
-                download_url,
+
+    // Lê o corpo da resposta como texto primeiro
+    let body_text = resp.text()?;
+
+    // Tenta converter o texto para a nossa struct
+    match serde_json::from_str::<Vec<NerinyanBeatmap>>(&body_text) {
+        Ok(beatmaps) => {
+            // Se funcionar, continua normalmente
+            { // Abre um novo escopo para o log
+                if let Ok(mut log_file) = OpenOptions::new().append(true).open("logs/search_log.txt") {
+                    writeln!(log_file, "--- DIAGNÓSTICO PRÉ-FILTRO ---").unwrap();
+                    writeln!(log_file, "Inspecionando {} beatmaps recebidos da API:", beatmaps.len()).unwrap();
+                    for b in &beatmaps {
+                        writeln!(log_file, "  - ID: {}, Título: '{}', Modo: {:?}", b.set_id, b.title, b.mode).unwrap();
+                    }
+                    writeln!(log_file, "--- FIM DO DIAGNÓSTICO PRÉ-FILTRO ---").unwrap();
+                }
             }
-        })
-        .collect();
-    Ok(items)
+            let items = beatmaps
+                .into_iter()
+                // O filtro foi removido. Agora apenas descartamos mapas com ID inválido.
+                .filter(|b| b.set_id > 0)
+                .map(|b| BeatmapFound {
+                    title: b.title,
+                    artist: b.artist,
+                    creator: b.creator,
+                    source: BeatmapSource::Nerinyan,
+                    download_url: format!("https://api.nerinyan.moe/d/{}", b.set_id),
+                })
+                .collect();
+            return Ok(items); // Retorna o sucesso imediatamente
+        },
+        Err(e) => {
+            // Se a conversão falhar, IMPRIME o erro e o corpo que causou a falha
+            eprintln!("--- ERRO FATAL DE DESSERIALIZAÇÃO (Nerinyan) ---");
+            eprintln!("O erro do Serde foi: {:?}", e);
+            eprintln!("\nO corpo da resposta que causou o erro foi:\n---\n{}\n---", body_text);
+
+            // --- ADIÇÃO CRÍTICA PARA LOGGING ---
+            if let Ok(mut log_file) = OpenOptions::new().append(true).open("logs/search_log.txt") {
+                writeln!(log_file, "--- ERRO FATAL DE DESSERIALIZAÇÃO (Nerinyan) ---").ok();
+                writeln!(log_file, "O erro do Serde foi: {:?}", e).ok();
+                writeln!(
+                    log_file,
+                    "\nO corpo da resposta que causou o erro foi:\n---\n{}\n---",
+                    body_text
+                )
+                .ok();
+            }
+            // --- FIM DA ADIÇÃO ---
+
+            anyhow::bail!("O formato da resposta da API Nerinyan era inválido.")
+        }
+    }
 }
 
+fn fetch_catboy(query: &str) -> anyhow::Result<Vec<BeatmapFound>> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("McOsuImporter/beatmap-search")
+        .build()?;
+    let encoded_query = urlencoding::encode(query);
+    let url = format!("https://catboy.best/api/v2/search?q={}", encoded_query);
+    println!("--- URL SENDO CHAMADA: {} ---", url);
+    // Envia a requisição e trata erros de conexão (DNS, etc.)
+    let resp = match client.get(&url).send() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Erro de conexão ao tentar buscar em Catboy.best: {:?}", e);
+            anyhow::bail!("Falha ao enviar requisição para Catboy.best");
+        }
+    };
+
+    // Verifica se o status da resposta HTTP é um sucesso (ex: 200 OK)
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_text = resp.text().unwrap_or_else(|_| "Falha ao ler o corpo do erro.".to_string());
+        anyhow::bail!("Falha na busca Catboy.best: Status HTTP {} - {}", status, error_text);
+    }
+
+    // --- MUDANÇA CRÍTICA: SEPARAÇÃO DAS ETAPAS ---
+    // Etapa 1: Ler o corpo inteiro da resposta como uma String de texto.
+    let body_text = match resp.text() {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("Erro ao ler o corpo da resposta como texto: {:?}", e);
+            anyhow::bail!("Falha ao ler o corpo da resposta da API.");
+        }
+    };
+
+    // Etapa 2: Tentar desserializar (converter) a String de texto para nossas structs.
+    // Esta é a única fonte possível do erro "invalid type: map, expected a sequence".
+    match serde_json::from_str::<CatboyApiResponse>(&body_text) {
+        Ok(api_response) => {
+            // Se a conversão foi um sucesso, mapeamos os resultados.
+            let items = api_response
+                .results
+                .into_iter()
+                .map(|b| {
+                    let download_url = format!("https://catboy.best/d/{}", b.set_id);
+                    BeatmapFound {
+                        title: b.title,
+                        artist: b.artist,
+                        creator: b.creator,
+                        source: BeatmapSource::Catboy,
+                        download_url,
+                    }
+                })
+                .collect();
+            
+            Ok(items)
+        },
+        Err(e) => {
+            // Se a conversão falhou, imprimimos o erro E o corpo que causou a falha.
+            eprintln!("--- ERRO FATAL DE DESSERIALIZAÇÃO ---");
+            eprintln!("O erro do Serde foi: {:?}", e);
+            eprintln!("\nO corpo da resposta que causou o erro foi:\n---\n{}\n---", body_text);
+            anyhow::bail!("O formato da resposta da API Catboy era inválido.")
+        }
+    }
+}
 fn build_osz_name(result: &BeatmapSearchResult) -> String {
     let mut name = format!("{} - {} ({})", result.artist, result.title, result.creator);
     name = app_state::sanitize_path_component(&name);
@@ -2725,11 +2861,15 @@ where
     res
 }
 
+fn beatmap_source_label(source: &BeatmapSource) -> &'static str {
+    match source {
+        BeatmapSource::Catboy => "Catboy.best",
+        BeatmapSource::Nerinyan => "Nerinyan",
+    }
+}
+
 fn to_search_item(result: &BeatmapSearchResult) -> BeatmapSearchItem {
-    let source_label = match result.source {
-        BeatmapSource::Beatconnect => "Beatconnect",
-        BeatmapSource::Chimu => "Chimu.moe",
-    };
+    let source_label = beatmap_source_label(&result.source);
     BeatmapSearchItem {
         id: result.id as i32,
         title: SharedString::from(&result.title),

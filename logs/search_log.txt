@@ -1,0 +1,63 @@
+
+--- INICIANDO NOVO CICLO DE BUSCA ---
+[DIAGNÓSTICO] Buscando pelo termo: 'freedom dive'
+--- DIAGNÓSTICO PRÉ-FILTRO ---
+Inspecionando 50 beatmaps recebidos da API:
+  - ID: 2380630, Título: 'Astra walkthrough', Modo: None
+  - ID: 2463002, Título: 'Kagami no Mary Sue', Modo: None
+  - ID: 2347249, Título: 'Divergence', Modo: None
+  - ID: 2402500, Título: 'Contrast', Modo: None
+  - ID: 2353751, Título: 'Fusion', Modo: None
+  - ID: 2380909, Título: 'Showdown (Cut Ver.)', Modo: None
+  - ID: 2412321, Título: 'Replay', Modo: None
+  - ID: 2424816, Título: 'croiX (Extended Ver.)', Modo: None
+  - ID: 2421709, Título: 'FREEDOM DiVE', Modo: None
+  - ID: 2202730, Título: 'Ascension to Heaven', Modo: None
+  - ID: 2216932, Título: 'LOVE DIVE (Japanese Ver.) (Slax Remix)', Modo: None
+  - ID: 1373600, Título: 'Disconnect Me (from saturator)', Modo: None
+  - ID: 2405981, Título: 'FREEDOM DiVE', Modo: None
+  - ID: 2357381, Título: 'Masquerade', Modo: None
+  - ID: 2154452, Título: 'Aleph-0 (Extended Ver.)', Modo: None
+  - ID: 2353640, Título: 'Luminaire', Modo: None
+  - ID: 2351445, Título: 'Divergence Theorem', Modo: None
+  - ID: 2283410, Título: 'Hesperides (Game Ver.)', Modo: None
+  - ID: 1576677, Título: 'Siva', Modo: None
+  - ID: 2269674, Título: 'I Can't Remember Anymore', Modo: None
+  - ID: 2323490, Título: 'Fusion', Modo: None
+  - ID: 2323832, Título: 'Fusion (Game Ver.)', Modo: None
+  - ID: 2324518, Título: 'Fusion', Modo: None
+  - ID: 2258384, Título: 'Central Nucleus', Modo: None
+  - ID: 2350645, Título: 'Heat Capacity', Modo: None
+  - ID: 2319588, Título: 'Dear Eternity', Modo: None
+  - ID: 2298941, Título: 'over the top', Modo: None
+  - ID: 2302808, Título: 'Oceanus', Modo: None
+  - ID: 2329509, Título: 'Miserea', Modo: None
+  - ID: 2266844, Título: 'Digital Warrior', Modo: None
+  - ID: 732090, Título: 'Qimranut', Modo: None
+  - ID: 2068847, Título: 'Ordirehv', Modo: None
+  - ID: 2196253, Título: 'Aragami (Short Ver.)', Modo: None
+  - ID: 1999295, Título: 'BS//Recall', Modo: None
+  - ID: 2142914, Título: 'Ascension to Heaven', Modo: None
+  - ID: 2113313, Título: 'Beyond Your Words (Cut Ver.)', Modo: None
+  - ID: 1534772, Título: 'Central Nucleus', Modo: None
+  - ID: 2237410, Título: 'FREEDOM DiVE', Modo: None
+  - ID: 1463973, Título: 'Oceanus', Modo: None
+  - ID: 1931481, Título: 'Myosotis (Remixed By Yamato Kasai From Mili)', Modo: None
+  - ID: 2214814, Título: 'FREEDOM DiVE', Modo: None
+  - ID: 2272663, Título: 'Ascension to Heaven', Modo: None
+  - ID: 646879, Título: 'Monochrome Re.Surgence', Modo: None
+  - ID: 2124323, Título: 'Catharsis', Modo: None
+  - ID: 2151447, Título: 'Erlung', Modo: None
+  - ID: 2040305, Título: 'Finder keepers (Short Ver.)', Modo: None
+  - ID: 2218349, Título: 'eddcore', Modo: None
+  - ID: 1909829, Título: 'Central Nucleus (CV4's Artcore Remix)', Modo: None
+  - ID: 2036517, Título: 'OBAMA DiVE (blobdash as "blobama" Bootleg)', Modo: None
+  - ID: 2184597, Título: 'ANiMA', Modo: None
+--- FIM DO DIAGNÓSTICO PRÉ-FILTRO ---
+[DIAGNÓSTICO] fetch_nerinyan retornou Ok. Número de beatmaps encontrados: 50
+[DIAGNÓSTICO] Vetor 'found' tem 50 itens antes do processamento do Mutex.
+[DIAGNÓSTICO] Mutex lock adquirido com sucesso.
+[DIAGNÓSTICO] Vetor 'items' tem 50 itens após o processamento do Mutex.
+[DIAGNÓSTICO] 'items' tem resultados. Enviando 50 itens para a UI.
+--- FIM DO CICLO DE BUSCA ---
+

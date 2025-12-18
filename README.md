@@ -1,100 +1,190 @@
 ﻿# McOsu Importer (Rust + Slint)
 
-Aplicativo desktop leve para Windows (compatível com outros SOs) que monitora a pasta de downloads e importa beatmaps `.osz` do osu! para a pasta `Songs` do McOsu, exibindo metadados, thumbnail, preview de audio e um viewer externo do mapa.
+A lightweight desktop app for Windows (also compatible with other platforms) that watches your Downloads folder and imports osu! beatmaps (`.osz`) into McOsu’s `Songs` folder. It shows beatmap metadata, thumbnails, audio preview, and an external beatmap viewer.
 
-## Requisitos
-- Rust estavel (testado com 1.80+).
-- Windows 10/11 (backends Slint/notify tambem funcionam em Linux/macOS).
+## Highlights
 
-## Build e execucao
-- Dev: `cargo run`
-- Release: `cargo build --release`  
-  - Executavel: `target/release/mcosu-importer.exe` (Windows) ou `target/release/mcosu-importer`
-  - Rodar release: `./target/release/mcosu-importer.exe` (PowerShell) ou `./target/release/mcosu-importer`
-- Perfil release usa `lto = "thin"`, `codegen-units = 1`, `opt-level = "z"` e `panic = "abort"` para binario menor.
-- Empacotar:
-  - Windows: `pwsh scripts/package.ps1`
-  - Linux/macOS: `sh scripts/package.sh`
-  - Artefatos ficam em `dist/` junto com README, CHANGELOG, LICENSE e `assets/`.
+- Watches a Downloads folder for new `.osz` files and queues them automatically.
+- Waits for **download stability** (size + mtime) before parsing/importing.
+- Extracts `.osu` metadata and background to generate a thumbnail.
+- Manual and bulk actions: **Import now**, per-card Import/Reimport/Ignore, clear completed, show/hide completed.
+- Duplicate detection (BeatmapSetID preferred; fallback to `.osz` hash).
+- Optional source cleanup: delete the original `.osz` from Downloads after successful import (with safety checks).
+- Audio preview (one-at-a-time) with cache.
+- Beatmap visual preview via a locally served viewer (`127.0.0.1`) opened in a new browser window.
 
-## Uso
-1) Abra o app.  
-2) Barra superior (2 linhas):
-   - Linha 1: pastas de Downloads e `Songs` do McOsu (campos somente leitura + botoes `Escolher`). Avisos de caminho inseguro aparecem logo abaixo.
-   - Linha 2: acoes (`Importar ja` destacado, `Adicionar .osz`, `Limpar concluidos`) e toggles (`Auto-import`, `Excluir fonte automaticamente`, `Mostrar concluidos`).
-3) Fluxo:
-   - Ao detectar `.osz`, o app espera estabilidade do download (tamanho e mtime iguais por N leituras).
-   - Le metadados dos `.osu`, detecta background e gera thumbnail.
-   - Importa para `Songs` somente se o toggle estiver ligado quando o item entrou na fila; caso contrario use `Importar ja` ou os botoes do card (Importar/Reimportar).  
-4) Botoes por card:
-   - Importar / Reimportar / Ignorar.
-   - Abrir arquivo (fonte) / Abrir destino / Abrir no navegador (usa BeatmapSetID).
-   - Preview de audio (play/pause unico por vez; cache em `%LOCALAPPDATA%/mcosu-importer/cache/audio/`).
-   - Preview visual do beatmap (abre o viewer estatico em uma janela nova do navegador via servidor local em `127.0.0.1`; tenta `--app=<URL>` em Edge/Chrome quando possivel, senao usa o navegador padrao).
-   - Excluir fonte (`.osz`): apos concluir a importacao, apaga apenas o `.osz` original em Downloads (confirmacao + Lixeira quando possivel). Fica desabilitado se o arquivo nao estiver em Downloads ou se houver conflito com a pasta `Songs`. Tambem pode ser ligado globalmente pelo toggle `Excluir fonte apos importar` (primeira vez pede confirmacao com "Nao perguntar novamente").
-   - Mensagens de erro ficam resumidas na linha `Erro:` com botao `Detalhes` para ver o texto completo (extracao do zip, escrita em Songs, leitura de metadados ou exclusao da fonte).
-   - Layout dos cards: thumbnail fixa a esquerda, info em linhas separadas e botoes organizados em linhas dedicadas (preview + acoes), com caminhos encurtados para evitar overlap.
-5) `Adicionar .osz` permite enfileirar manualmente.
-6) Aba `Beatmaps`: pesquise por nome/artista/mapper e clique em `Buscar` para consultar Beatconnect e Chimu.moe. Os resultados listam titulo, artista/mapper, fonte e botao `Download`. O download ocorre direto para a pasta de Downloads configurada; ao concluir, o `.osz` e enfileirado automaticamente.
+## Requirements
 
-### Preview de audio e mapa
-- Audio: so toca um preview por vez; clicar em outro item pausa o anterior. Usa o arquivo de audio do `.osz` ou do destino importado e reusa cache em `%LOCALAPPDATA%/mcosu-importer/cache/audio/`.
-- Beatmap: ao clicar em `Preview beatmap`, o app monta um `.osz` temporario (a partir da fonte ou da pasta de destino se a fonte ja foi apagada), coloca em `%LOCALAPPDATA%/mcosu-importer/cache/preview/<hash>/` e sobe um servidor local para servir o viewer estatico vendorizado em `assets/viewer/`. Abre uma janela nova do navegador; em Windows tenta Edge/Chrome com `--app=<URL>` para ficar sem abas, e cai para o navegador padrao se nao achar.
-- Logs trazem a porta, pasta de cache e URL usada para debug.
+- Stable Rust toolchain (tested with Rust 1.80+).
+- Windows 10/11 recommended (Slint/notify also work on Linux/macOS depending on backend support).
 
-### Onde fica a pasta Songs do McOsu?
-Steam > Biblioteca > clique direito em McOsu > Gerenciar > Procurar arquivos locais > abra a pasta `Songs`.
+## Build and Run
 
-### Detecao de download estavel
-- Parametros em `config.json`: `consecutive_checks`, `interval_ms`, `timeout_secs` (defaults: 3, 700ms, 120s).
-- Considera estavel apos N leituras seguidas sem alteracao de tamanho ou timestamp; se ultrapassar o timeout, falha.
+- Dev:
+  ```bash
+  cargo run
+  ```
 
-### Seguranca de caminhos
-- Ao escolher as pastas, o app impede selecionar `Songs` dentro (ou igual) da pasta de Downloads e avisa, mantendo a configuracao anterior.
-- Configuracoes perigosas (Downloads e Songs iguais/aninhadas) exibem aviso persistente no topo e bloqueiam `Importar ja`, auto-import e exclusao da fonte (manual/automatica) ate corrigir o caminho.
+- Release:
+  ```bash
+  cargo build --release
+  ```
+  - Binary:
+    - Windows: `target/release/mcosu-importer.exe`
+    - Linux/macOS: `target/release/mcosu-importer`
+  - Run release:
+    - PowerShell: `\target\release\mcosu-importer.exe`
+    - bash/zsh: `./target/release/mcosu-importer`
 
-### Duplicados
-- Preferencia por `BeatmapSetID`; fallback em hash do `.osz`.
-- Indice armazenado em `cache/cache.json`.
-- Estados de duplicado oferecem: Abrir destino, Reimportar (sobrescrever), Ignorar.
+- Release profile is optimized for smaller binaries:
+  - `lto = "thin"`, `codegen-units = 1`, `opt-level = "z"`, `panic = "abort"`
 
-### Exclusao da fonte (.osz)
-- Visivel depois de Concluido; apaga apenas o arquivo `.osz` original em Downloads (o destino `Songs` fica intacto).
-- Usa Lixeira/Recycle Bin quando possivel; se falhar tenta `remove_file` e registra no log (nao marca a importacao como falha, mas mostra aviso/detalhes).
-- So aparece habilitado se a fonte estiver dentro da pasta de Downloads configurada e se nao houver conflito com a pasta `Songs`.
-- Opcao global `Excluir fonte apos importar` repete a exclusao automaticamente apos Concluido; a primeira vez mostra confirmacao com "Nao perguntar novamente".
+- Packaging:
+  - Windows:
+    ```bash
+    pwsh scripts/package.ps1
+    ```
+  - Linux/macOS:
+    ```bash
+    sh scripts/package.sh
+    ```
+  - Output goes to `dist/` (binary + README/CHANGELOG/LICENSE + assets).
 
-### Cache, config e logs
-- Diretorio de dados: `%LOCALAPPDATA%/mcosu-importer` (Windows) ou equivalente XDG/Library em outros SOs.
-- `config.json`: caminhos de downloads, songs, auto-import e estabilidade.
-- `cache/cache.json`: thumbnails, cache de audio e indice de duplicados (BeatmapSetID e hash).
-- Thumbnails: `cache/thumbnails/`.
-- Preview de audio: `cache/audio/<hash>/`; preview visual/extracao: `cache/preview/<hash>/` (servido pelo HTTP local ao abrir o viewer).
-- Logs: `logs/app.log`. Botao "Copiar logs" copia o painel atual para a area de transferencia.
-- Limpar: feche o app e apague a pasta `mcosu-importer` em dados do usuario. Na primeira execucao, o app migra `config.json`/`cache.json` se ainda estiverem na pasta atual.
+## Usage
 
-## Testes
+1) Launch the app.
+
+2) Top bar (two rows):
+- **Row 1:** Downloads and McOsu `Songs` folders (read-only fields + **Choose** buttons). Path safety warnings show right below.
+- **Row 2:** Actions (**Import now**, **Add .osz**, **Clear completed**) and toggles (**Auto-import**, **Auto-delete source**, **Show completed**).
+
+3) Pipeline:
+- When a `.osz` is detected, the app waits until it stabilizes.
+- It parses `.osu` files, reads metadata, finds the background image, and generates a thumbnail.
+- Import behavior:
+  - Auto-import only applies to items that entered the queue **after** auto-import is enabled.
+  - Otherwise use **Import now** or the per-card Import/Reimport buttons.
+
+### Per-card actions
+
+- Import / Reimport / Ignore
+- Open source (file) / Open destination / Open in browser (uses BeatmapSetID when available)
+- **Audio preview** (single active preview at a time; cached)
+- **Beatmap preview** (opens the local viewer in a new browser window)
+- **Delete source (.osz)** after completed import:
+  - Deletes only the original `.osz` in the configured Downloads folder
+  - Confirmation prompt + Recycle Bin when possible
+  - Disabled when the file is outside Downloads or when Songs overlaps Downloads (safety)
+
+Error messages appear summarized in an `Error:` row with a **Details** dialog for full text (zip extraction, Songs write errors, metadata parsing, or source deletion failures).
+
+### Add `.osz` manually
+
+Use **Add .osz** to enqueue a file from anywhere. (Source deletion stays disabled if the file isn’t inside the configured Downloads folder.)
+
+## Beatmaps tab (search workflow)
+
+The app can help you discover beatmaps by searching and opening results in your browser. After you download a `.osz` via the browser, the watcher will detect it in your Downloads folder and enqueue it automatically.
+
+> Note: This avoids embedding downloading logic directly into the app; the app focuses on local import and preview.
+
+## Audio and Beatmap Preview
+
+### Audio preview
+- Only one preview plays at a time (starting a new preview pauses the previous).
+- Uses audio from the `.osz` or from the imported destination.
+- Cache location: `%LOCALAPPDATA%/mcosu-importer/cache/audio/`
+
+### Beatmap preview
+- On **Preview beatmap**, the app prepares a temporary preview directory:
+  - `%LOCALAPPDATA%/mcosu-importer/cache/preview/<hash>/`
+- Serves a vendored static viewer from `assets/viewer/` over a local HTTP server on `127.0.0.1`.
+- Opens a new browser window; on Windows it tries Edge/Chrome `--app=<URL>` when available, otherwise falls back to the default browser.
+- Logs include the chosen port, cache path, and URL for debugging.
+
+## Where is McOsu’s Songs folder?
+
+Steam → Library → right-click **McOsu** → Manage → Browse local files → open the `Songs` folder.
+
+## Download Stability Detection
+
+Configurable in `config.json`:
+- `consecutive_checks` (default: 3)
+- `interval_ms` (default: 700ms)
+- `timeout_secs` (default: 120s)
+
+A file is considered stable after N consecutive checks with no size/mtime changes. If it exceeds the timeout, it fails with a clear status/error.
+
+## Path Safety
+
+- The app prevents selecting `Songs` inside (or equal to) the Downloads folder.
+- Dangerous configs (Downloads and Songs overlapping) show a persistent warning and disable:
+  - **Import now**
+  - auto-import
+  - source deletion (manual/automatic)
+until the paths are fixed.
+
+## Duplicates
+
+- Primary key: BeatmapSetID
+- Fallback: `.osz` hash
+- Index stored in: `cache/cache.json`
+- Duplicate state offers:
+  - Open destination
+  - Reimport (overwrite)
+  - Ignore
+
+## Source Deletion (.osz)
+
+- Only removes the original `.osz` from the configured Downloads folder.
+- Uses Recycle Bin when possible; falls back to `remove_file` if needed.
+- Deletion failures do not mark the import as failed, but show a warning + details.
+
+Auto-delete can be enabled globally with **Auto-delete source after import** (first-time confirmation with “Don’t ask again”).
+
+## Data, Cache, and Logs
+
+- Data directory:
+  - Windows: `%LOCALAPPDATA%/mcosu-importer`
+  - Other OS: XDG/Library equivalents via `directories`
+- `config.json`: paths, toggles, stability params
+- `cache/cache.json`: thumbnails, audio cache index, duplicate index
+- Thumbnails: `cache/thumbnails/`
+- Audio cache: `cache/audio/<hash>/`
+- Preview cache: `cache/preview/<hash>/`
+- Logs: `logs/app.log`  
+  Use **Copy logs** to copy the current log panel content to clipboard.
+
+Cleanup: close the app and remove the `mcosu-importer` data folder. On first run, the app migrates legacy `config.json/cache.json` from the working directory if present.
+
+## Tests
+
 ```bash
 cargo test
 ```
 
-## Troubleshooting (8 bullets)
-- Card preso em "Aguardando": verifique se o download terminou; ajuste `consecutive_checks`/`interval_ms` no `config.json`.
-- "Arquivo nao estabilizou": timeout de 120s expirou; confira permissoes da pasta de downloads.
-- Sem thumbnail: o `.osz` nao possui referencia valida de background ou o formato nao e suportado.
-- "Duplicado": o BeatmapSetID ou hash ja esta no cache; use "Reimportar" para sobrescrever ou "Abrir destino" para reutilizar.
-- Pasta de destino vazia: confirme a pasta `Songs` do McOsu e permissoes de escrita.
-- Logs nao aparecem: confira `logs/app.log` no diretorio de dados; use "Copiar logs".
-- UI nao abre: tente rodar `cargo run -q` pelo terminal e veja erros; valide drivers/GTK/Qt conforme backend do Slint.
-- Build falhou em release: limpe com `cargo clean` e garanta toolchain recente (1.80+).
+## Troubleshooting
 
-## Observacoes de seguranca/privacidade
-- Sem download direto, scraping, login ou cookies; apenas arquivos locais.
-- A unica acao externa opcional e abrir a pagina do beatmap no navegador quando existe BeatmapSetID.
+- Stuck on “Waiting”: the download may still be writing; tweak `consecutive_checks` / `interval_ms`.
+- “File did not stabilize”: the stability timeout expired; check permissions or download speed.
+- No thumbnail: the `.osz` has no supported background reference.
+- “Duplicate”: BeatmapSetID or hash is already indexed; use **Reimport** to overwrite.
+- Destination looks empty: verify McOsu `Songs` path and write permissions.
+- Logs missing: check `logs/app.log` under the data directory.
+- UI won’t open on Linux/macOS: verify Slint backend dependencies for your system.
+- Release build fails: run `cargo clean` and update the toolchain.
+
+## Security / Privacy
+
+- No login, cookies, or browser automation.
+- The app primarily processes local files.
+- Optional external actions include opening a beatmap page or preview window in your browser.
+- Beatmap viewer runs locally on `127.0.0.1` and serves only cached/local assets.
 
 ## Known Issues / Limitations
-- Nao calcula estrelas/pp.
-- Drag-and-drop depende do backend; use "Adicionar .osz" se nao funcionar.
-- Detecao de duplicado via BeatmapSetID ou hash (nao compara conteudo arquivo a arquivo).
-- Thumbnails so aparecem se o `.osz` trouxer referencia valida de background.
-- Preview do beatmap depende do navegador padrao; modo app so funciona se Edge/Chrome estiverem disponiveis. O viewer roda em `127.0.0.1` e usa cache em `cache/preview/`.
+
+- No star rating / pp calculation.
+- Drag-and-drop depends on backend support; use **Add .osz** if needed.
+- Duplicate detection uses BeatmapSetID/hash (does not compare file-by-file content).
+- Thumbnails require a valid background reference inside the `.osz`.
+- Beatmap preview depends on an available browser; “app window” mode only works if Edge/Chrome are available.
